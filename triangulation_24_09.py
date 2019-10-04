@@ -14,6 +14,7 @@ import threading,queue
 import math
 import numpy as np
 import cv2
+import ssdoidv4_24_09
 
 # ------------------------------
 # Testing
@@ -82,10 +83,8 @@ def run():
         targeter1.contour_min_area = 1
         targeter1.targets_max = 1
         targeter1.target_on_contour = True # False = use box size
-        targeter1.target_return_box = False # (x,y,bx,by,bw,bh)
+        targeter1.target_return_box = True # (x,y,bx,by,bw,bh)
         targeter1.target_return_size = True # (x,y,%frame)
-        targeter1.contour_draw = True
-        targeter1.contour_box_draw = False
         targeter1.targets_draw = True
 
         # motion camera2
@@ -94,10 +93,8 @@ def run():
         targeter2.contour_min_area = 1
         targeter2.targets_max = 1
         targeter2.target_on_contour = True # False = use box size
-        targeter2.target_return_box = False # (x,y,bx,by,bw,bh)
+        targeter2.target_return_box = True # (x,y,bx,by,bw,bh)
         targeter2.target_return_size = True # (x,y,%frame)
-        targeter2.contour_draw = True
-        targeter2.contour_box_draw = False
         targeter2.targets_draw = True
 
         # ------------------------------
@@ -105,7 +102,7 @@ def run():
         # ------------------------------
 
         # pause to stabilize
-        time.sleep(0.5)
+        time.sleep(0.5)	#modify according to lag
 
         # ------------------------------
         # targeting loop 
@@ -158,7 +155,7 @@ def run():
                     # check 3: queues full
                     if len(x1k) >= klen:
 
-                        # trim ???
+                        # trim such that the latest 3 entries remain in the array
                         x1k = x1k[-klen:]
                         y1k = y1k[-klen:]
                         x2k = x2k[-klen:]
@@ -264,7 +261,7 @@ class Camera_Thread:
 
     # Using the user variables (see below):
     # Set the camera source number (default is camera 0).
-    # Set the camera pixel width and height (default is 640x480).
+    # Set the camera pixel width and height (default is 1280x720).
     # Set the target (max) frame rate (default is 30).
     # Set the number of frames to keep in the buffer (default is 4).
     # Set buffer_all variable: True = no frame loss, for reading files, don't read another frame until buffer allows
@@ -286,8 +283,8 @@ class Camera_Thread:
 
     # camera setup
     camera_source = 0
-    camera_width = 640
-    camera_height = 480
+    camera_width = 1280
+    camera_height = 720
     camera_frame_rate = 30
     camera_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
 
@@ -477,40 +474,15 @@ class Frame_Motion:
     # User Variables
     # ------------------------------
 
-    # blur (must be positive and odd)
-    gaussian_blur = 15
-
-    # threshold
-    threshold = 15
-
-    # dilation
-    dilation_value = 6
-    dilation_iterations = 2
-    dilation_kernel = np.ones((dilation_value,dilation_value),np.uint8)
-
     # contour size
     contour_min_area = 1  # percent of frame area
-    contour_max_area = 80 # percent of frame area
+    contour_max_area = 100 # percent of frame area
 
     # target select
-    targets_max = 4 # max targets returned, hence will not detect more than 4 things in a frame
+    targets_max = 1 # max targets returned, hence will not detect more than 4 things in a frame
     target_on_contour = True # else use box size
-    target_return_box  = False # True = return (x,y,bx,by,bw,bh), else check target_return_size
+    target_return_box  = True # True = return (x,y,bx,by,bw,bh), else check target_return_size
     target_return_size = False # True = return (x,y,percent_frame_size), else just (x,y)
-
-    # display contour
-    contour_draw  = True
-    contour_line  = 1 # border width
-    contour_point = 4 # centroid point radius
-    contour_pline = -1 # centroid point line width
-    contour_color = (0,255,255) # BGR color
-        
-    # display contour box
-    contour_box_draw  = True
-    contour_box_line  = 1 # border width
-    contour_box_point = 4 # centroid point radius
-    contour_box_pline = -1 # centroid point line width
-    contour_box_color = (0,255,0) # BGR color
 
     # display targets
     targets_draw  = True
@@ -522,99 +494,45 @@ class Frame_Motion:
     # System Variables
     # ------------------------------
 
-    last_frame = None
-
     # ------------------------------
     # Functions
     # ------------------------------
 
-    def targets(self,frame):
+    def targets(self,frame,bx,by,bw,bh): # This has to be passed from the ssd code (this function is called there)
 
         # frame dimensions
         width,height,depth = np.shape(frame)
         area = width*height
 
-        # grayscale
-        frame2 = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
-
-        # blur
-        frame2 = cv2.GaussianBlur(frame2,(self.gaussian_blur,self.gaussian_blur),0)
-
-        # initialize compare frame
-        if self.last_frame is None:
-            self.last_frame = frame2
-            return []
-
-        # delta
-        frame3 = cv2.absdiff(self.last_frame,frame2)
-
-        # threshold
-        frame3 = cv2.threshold(frame3,self.threshold,255,cv2.THRESH_BINARY)[1]
-
-        # dilation
-        frame3 = cv2.dilate(frame3,self.dilation_kernel,iterations=self.dilation_iterations)
-
-        # get contours
-        frame3,contours,hierarchy = cv2.findContours(frame3,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-
+       
         # targets
         targets = []
-        for c in contours:
-                    
-            # basic contour data
-            ca = cv2.contourArea(c)
-            bx,by,bw,bh = cv2.boundingRect(c) # these coordinates are gotten from the ssd code
-            ba = bw*bh
+        
+         # the bounding box coordinates are gotten from the ssd code
+        ba = bw*bh
 
-            # target on contour
-            if self.target_on_contour:
-                p = 100*ca/area
-                if (p >= self.contour_min_area) and (p <= self.contour_max_area):
-                    M = cv2.moments(c)#;print( M )
-                    tx = int(M['m10']/M['m00'])
-                    ty = int(M['m01']/M['m00'])
-                    targets.append((p,tx,ty,bx,by,bw,bh,c))
+        p = 100*ba/area
+        if (p >= self.contour_min_area) and (p <= self.contour_max_area):
+            tx = bx+int(bw/2)
+            ty = by+int(bh/2)
+            targets.append((p,tx,ty,bx,by,bw,bh))
 
-            # target on contour box
-            else:
-                p = 100*ba/area
-                if (p >= self.contour_min_area) and (p <= self.contour_max_area):
-                    tx = bx+int(bw/2)
-                    ty = by+int(bh/2)
-                    targets.append((p,tx,ty,bx,by,bw,bh,c))
-
-        # select targets
-        targets.sort()
-        targets.reverse()
-        targets = targets[:self.targets_max]
-
-        # add contours to frame
-        if self.contour_draw:
-            for size,x,y,bx,by,bw,bh,c in targets:
-                cv2.drawContours(frame,[c],0,self.contour_color,self.contour_line)
-                cv2.circle(frame,(x,y),self.contour_point,self.contour_color,self.contour_pline)
-
-        # add contour boxes to frame
-        if self.contour_box_draw:
-            for size,x,y,bx,by,bw,bh,c in targets:
-                cv2.rectangle(frame,(bx,by),(bx+bw,by+bh),self.contour_box_color,self.contour_box_line)
-                cv2.circle(frame,(bx+int(bw/2),by+int(bh/2)),self.contour_box_point,self.contour_box_color,self.contour_box_pline)
-
+            
+        
         # add targets to frame
         if self.targets_draw:
-            for size,x,y,bx,by,bw,bh,c in targets:
+            for size,x,y,bx,by,bw,bh in targets:
                 cv2.circle(frame,(x,y),self.targets_point,self.targets_color,self.targets_pline)
 
-        # reset last frame
-        self.last_frame = frame2
+       
 
         # return target x,y
         if self.target_return_box:
-            return [(x,y,bx,by,bw,bh) for (size,x,y,bx,by,bw,bh,c) in targets]
+            return [(x,y,bx,by,bw,bh) for (size,x,y,bx,by,bw,bh) in targets]
         elif self.target_return_size:
-            return [(x,y,size) for (size,x,y,bx,by,bw,bh,c) in targets]
+            return [(x,y,size) for (size,x,y,bx,by,bw,bh) in targets]
         else:
-            return [(x,y) for (size,x,y,bx,by,bw,bh,c) in targets]
+            return [(x,y) for (size,x,y,bx,by,bw,bh) in targets]
 
     def frame_add_crosshairs(self,frame,x,y,r=20,lc=(0,0,255),cc=(0,0,255),lw=1,cw=1):
 
@@ -662,11 +580,11 @@ class Frame_Angles:
     # User Variables
     # ------------------------------
 
-    pixel_width = 640
-    pixel_height = 480
+    pixel_width = 1280
+    pixel_height = 720
 
-    angle_width = 60
-    angle_height = None
+    angle_width = 46
+    angle_height = 36
     
     # ------------------------------
     # System Variables
