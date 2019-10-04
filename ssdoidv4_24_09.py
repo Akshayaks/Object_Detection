@@ -13,6 +13,7 @@ from collections import defaultdict
 from io import StringIO
 from matplotlib import pyplot as plt
 from PIL import Image
+import triangulation_24_09
 
 import cv2
 cap = cv2.VideoCapture(0)
@@ -31,6 +32,7 @@ from utils import label_map_util
 from utils import visualization_utils as vis_util
 
 
+triangulation_obj = triangulation_24_09.Frame_Motion()
 # # Model preparation 
 
 # ## Variables
@@ -158,6 +160,7 @@ with detection_graph.as_default():
       for i in range(len(np_classes)): #traverse the length of np_classes
         if np_classes[i] == get_id_for_label("Human face"): # id of Human face
           print(np_boxes[i])
+          triangulation_obj.targets(image_np,np_boxes[i][0],np_boxes[i][1],np_boxes[i][2],np_boxes[i][3])
                 
       cv2.imshow('object detection', cv2.resize(image_np, (800,600)))
       if cv2.waitKey(1) & 0xFF == ord('q'):
