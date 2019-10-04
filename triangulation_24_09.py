@@ -14,7 +14,101 @@ import threading,queue
 import math
 import numpy as np
 import cv2
-import ssdoidv4_24_09
+import six.moves.urllib as urllib
+import tarfile
+import tensorflow as tf
+import zipfile
+from collections import defaultdict
+from io import StringIO
+from matplotlib import pyplot as plt
+from PIL import Image
+from utils import label_map_util
+from utils import visualization_utils as vis_util
+
+#cap = cv2.VideoCapture(0)
+
+# This is needed since the notebook is stored in the object_detection folder.
+sys.path.append("..")
+
+
+# ## Object detection imports
+# Here are the imports from the object detection module.
+
+
+# # Model preparation 
+
+# ## Variables
+# 
+# Any model exported using the `export_inference_graph.py` tool can be loaded here simply by changing `PATH_TO_CKPT` to point to a new .pb file.  
+# 
+# By default we use an "SSD with Mobilenet" model here. See the [detection model zoo](https://github.com/tensorflow/models/blob/master/object_detection/g3doc/detection_model_zoo.md) for a list of other models that can be run out-of-the-box with varying speeds and accuracies.
+
+
+# What model to download.
+MODEL_NAME = 'ssd_mobilenet_v2_oid_v4_2018_12_12'
+MODEL_FILE = MODEL_NAME + '.tar.gz'
+DOWNLOAD_BASE = 'http://download.tensorflow.org/models/object_detection/'
+
+# Path to frozen detection graph. This is the actual model that is used for the object detection.
+PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
+
+# List of the strings that is used to add correct label for each box.
+PATH_TO_LABELS = os.path.join('data', 'oid_v4_label_map.pbtxt')
+
+NUM_CLASSES = 601
+
+
+# ## Download Model
+
+#opener = urllib.request.URLopener()
+#opener.retrieve(DOWNLOAD_BASE + MODEL_FILE, MODEL_FILE)
+#tar_file = tarfile.open(MODEL_FILE)
+#for file in tar_file.getmembers():
+#  file_name = os.path.basename(file.name)
+#  if 'frozen_inference_graph.pb' in file_name:
+#    tar_file.extract(file, os.getcwd())
+
+
+# ## Load a (frozen) Tensorflow model into memory.
+
+detection_graph = tf.Graph()
+with detection_graph.as_default():
+  od_graph_def = tf.GraphDef()
+  with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid:
+    serialized_graph = fid.read()
+    od_graph_def.ParseFromString(serialized_graph)
+    tf.import_graph_def(od_graph_def, name='')
+
+
+# ## Loading label map
+# Label maps map indices to category names, so that when our convolution network predicts `5`, we know that this corresponds to `airplane`.  Here we use internal utility functions, but anything that returns a dictionary mapping integers to appropriate string labels would be fine
+
+label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
+categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
+category_index = label_map_util.create_category_index(categories)
+#print(category_index)
+
+
+# ## Helper code
+
+def load_image_into_numpy_array(image):
+  (im_width, im_height) = image.size
+  return np.array(image.getdata()).reshape(
+      (im_height, im_width, 3)).astype(np.uint8)
+def get_id_for_label(val):
+    for key,value in category_index.items(): # to find id of glasses
+        for inner_key,inner_value in value.items():
+          if inner_value==val:
+            return value['id']
+
+
+# # Detection
+
+PATH_TO_TEST_IMAGES_DIR = 'test_images'
+TEST_IMAGE_PATHS = [ os.path.join(PATH_TO_TEST_IMAGES_DIR, 'image{}.jpg'.format(i)) for i in range(1, 3) ]
+
+# Size, in inches, of the output images.
+IMAGE_SIZE = (12, 8)
 
 # ------------------------------
 # Testing
@@ -102,7 +196,7 @@ def run():
         # ------------------------------
 
         # pause to stabilize
-        time.sleep(0.5)	#modify according to lag
+        time.sleep(0.5) #modify according to lag
 
         # ------------------------------
         # targeting loop 
@@ -371,6 +465,7 @@ class Camera_Thread:
         # drop buffer
         self.buffer = None
 
+
     def loop(self):
 
         # load start frame
@@ -386,52 +481,87 @@ class Camera_Thread:
         fc = 0
         t1 = time.time()
 
+        with detection_graph.as_default():
+            with tf.Session(graph=detection_graph) as sess:
+                print("I am in the tf session")
         # loop
-        while 1:
+                while 1:
 
-            # external shut down
-            if not self.frame_grab_run:
-                break
-
-            # true buffered mode (for files, no loss)
-            if self.buffer_all:
-
-                # buffer is full, pause and loop
-                if self.buffer.full():
-                    time.sleep(1/self.camera_frame_rate)
-
-                # or load buffer with next frame
-                else:
-                    
-                    grabbed,frame = self.camera.read()
-
-                    if not grabbed:
+                    # external shut down
+                    if not self.frame_grab_run:
                         break
 
-                    self.buffer.put(frame,False)
-                    self.frame_count += 1
-                    fc += 1
+                    # true buffered mode (for files, no loss)
+                    if self.buffer_all:
 
-            # false buffered mode (for camera, loss allowed)
-            else:
+                        # buffer is full, pause and loop
+                        if self.buffer.full():
+                            time.sleep(1/self.camera_frame_rate)
 
-                grabbed,frame = self.camera.read()
-                if not grabbed:
-                    break
+                        # or load buffer with next frame
+                        else:
+                            
+                            grabbed,frame = self.camera.read()
 
-                # open a spot in the buffer
-                if self.buffer.full():
-                    self.buffer.get()
+                            # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+                            image_np_expanded = np.expand_dims(frame, axis=0)
+                            image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
+                            # Each box represents a part of the image where a particular object was detected.
+                            boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
+                            # Each score represent how level of confidence for each of the objects.
+                            # Score is shown on the result image, together with the class label.
+                            scores = detection_graph.get_tensor_by_name('detection_scores:0')
+                            classes = detection_graph.get_tensor_by_name('detection_classes:0')
+                            num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+                            # Actual detection.
+                            (boxes, scores, classes, num_detections) = sess.run(
+                                [boxes, scores, classes, num_detections],
+                                feed_dict={image_tensor: image_np_expanded})
+                            # Visualization of the results of a detection.
+                            vis_util.visualize_boxes_and_labels_on_image_array(
+                                frame,
+                                np.squeeze(boxes),
+                                np.squeeze(classes).astype(np.int64), #changed it from int32
+                                np.squeeze(scores),
+                                category_index,
+                                use_normalized_coordinates=True,
+                                line_thickness=8)
+                            
+                            np_boxes = np.squeeze(boxes)
+                            np_classes = np.squeeze(classes)
+                            
+                            for i in range(len(np_classes)): #traverse the length of np_classes
+                              if np_classes[i] == get_id_for_label("Human face"): # id of Human face
+                                print(np_boxes[i])
+                            cv2.imshow('object detection', cv2.resize(frame, (800,600)))
 
-                self.buffer.put(frame,False)
-                self.frame_count += 1
-                fc += 1
+                            if not grabbed:
+                                break
 
-            # update frame read rate
-            if fc >= 10:
-                self.current_frame_rate = round(fc/(time.time()-t1),2)
-                fc = 0
-                t1 = time.time()
+                            self.buffer.put(frame,False)
+                            self.frame_count += 1
+                            fc += 1
+
+                    # false buffered mode (for camera, loss allowed)
+                    else:
+
+                        grabbed,frame = self.camera.read()
+                        if not grabbed:
+                            break
+
+                        # open a spot in the buffer
+                        if self.buffer.full():
+                            self.buffer.get()
+
+                        self.buffer.put(frame,False)
+                        self.frame_count += 1
+                        fc += 1
+
+                    # update frame read rate
+                    if fc >= 10:
+                        self.current_frame_rate = round(fc/(time.time()-t1),2)
+                        fc = 0
+                        t1 = time.time()
 
         # shut down
         self.loop_start_time = 0
@@ -498,7 +628,7 @@ class Frame_Motion:
     # Functions
     # ------------------------------
 
-    def targets(self,frame,bx,by,bw,bh): # This has to be passed from the ssd code (this function is called there)
+    def targets(self,frame,bx=4,by=4,bw=3,bh=3): # This has to be passed from the ssd code (this function is called there)
 
         # frame dimensions
         width,height,depth = np.shape(frame)
