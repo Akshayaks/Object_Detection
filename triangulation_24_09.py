@@ -27,6 +27,7 @@ from utils import visualization_utils as vis_util
 
 #cap = cv2.VideoCapture(0)
 
+
 # This is needed since the notebook is stored in the object_detection folder.
 sys.path.append("..")
 
@@ -110,6 +111,9 @@ TEST_IMAGE_PATHS = [ os.path.join(PATH_TO_TEST_IMAGES_DIR, 'image{}.jpg'.format(
 # Size, in inches, of the output images.
 IMAGE_SIZE = (12, 8)
 
+# For synchronization of imshow
+turn = 0
+
 # ------------------------------
 # Testing
 # ------------------------------
@@ -126,17 +130,17 @@ def run():
         # ------------------------------
 
         # cameras variables
-        left_camera_source = 1
-        right_camera_source = 2
+        left_camera_source = 2
+        right_camera_source = 0
         pixel_width = 1280     # Based on specifications of C270 hd logitech camera  
         pixel_height = 720     
-        angle_width = 46           
+        angle_width = 46    #Found using manual methods (as seen in the video)       
         angle_height = 36
-        frame_rate = 20                 #cameras tested with find_fps_webcam.py - keeps changing
+        frame_rate = 30                 #cameras tested with find_fps_webcam.py - keeps changing
         camera_separation = 2.3622     #60 mm baseline separation (given in inches)
-
+        
         # left camera 1
-        ct1 = Camera_Thread()
+        ct1 = Camera_Thread()    # Each of these threads need to run both the SSD and the triangulation code
         ct1.camera_source = left_camera_source
         ct1.camera_width = pixel_width
         ct1.camera_height = pixel_height
@@ -278,6 +282,7 @@ def run():
             text = 'X: {:3.1f}\nY: {:3.1f}\nZ: {:3.1f}\nD: {:3.1f}\nFPS: {}/{}'.format(X,Y,Z,D,fps1,fps2)
             lineloc = 0
             lineheight = 30
+            print("FPS calculated")
             for t in text.split('\n'):
                 lineloc += lineheight
                 cv2.putText(frame1,
@@ -483,7 +488,7 @@ class Camera_Thread:
 
         with detection_graph.as_default():
             with tf.Session(graph=detection_graph) as sess:
-                print("I am in the tf session")
+                print("I am in the tf session") # This gets printed for both cameras, implying that they both enter this
         # loop
                 while 1:
 
@@ -500,40 +505,10 @@ class Camera_Thread:
 
                         # or load buffer with next frame
                         else:
-                            
+                            print("Inside True buffer_all condition")
                             grabbed,frame = self.camera.read()
 
-                            # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-                            image_np_expanded = np.expand_dims(frame, axis=0)
-                            image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
-                            # Each box represents a part of the image where a particular object was detected.
-                            boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
-                            # Each score represent how level of confidence for each of the objects.
-                            # Score is shown on the result image, together with the class label.
-                            scores = detection_graph.get_tensor_by_name('detection_scores:0')
-                            classes = detection_graph.get_tensor_by_name('detection_classes:0')
-                            num_detections = detection_graph.get_tensor_by_name('num_detections:0')
-                            # Actual detection.
-                            (boxes, scores, classes, num_detections) = sess.run(
-                                [boxes, scores, classes, num_detections],
-                                feed_dict={image_tensor: image_np_expanded})
-                            # Visualization of the results of a detection.
-                            vis_util.visualize_boxes_and_labels_on_image_array(
-                                frame,
-                                np.squeeze(boxes),
-                                np.squeeze(classes).astype(np.int64), #changed it from int32
-                                np.squeeze(scores),
-                                category_index,
-                                use_normalized_coordinates=True,
-                                line_thickness=8)
                             
-                            np_boxes = np.squeeze(boxes)
-                            np_classes = np.squeeze(classes)
-                            
-                            for i in range(len(np_classes)): #traverse the length of np_classes
-                              if np_classes[i] == get_id_for_label("Human face"): # id of Human face
-                                print(np_boxes[i])
-                            cv2.imshow('object detection', cv2.resize(frame, (800,600)))
 
                             if not grabbed:
                                 break
@@ -544,11 +519,54 @@ class Camera_Thread:
 
                     # false buffered mode (for camera, loss allowed)
                     else:
-
+                        print("Inside the SSD")
                         grabbed,frame = self.camera.read()
+                        # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+                        image_np_expanded = np.expand_dims(frame, axis=0)
+                        image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
+                        # Each box represents a part of the image where a particular object was detected.
+                        boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
+                        # Each score represent how level of confidence for each of the objects.
+                        # Score is shown on the result image, together with the class label.
+                        scores = detection_graph.get_tensor_by_name('detection_scores:0')
+                        classes = detection_graph.get_tensor_by_name('detection_classes:0')
+                        num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+                        # Actual detection.
+                        (boxes, scores, classes, num_detections) = sess.run(
+                            [boxes, scores, classes, num_detections],
+                            feed_dict={image_tensor: image_np_expanded})
+                        # Visualization of the results of a detection.
+                        vis_util.visualize_boxes_and_labels_on_image_array(
+                            frame,
+                            np.squeeze(boxes),
+                            np.squeeze(classes).astype(np.int64), #changed it from int32
+                            np.squeeze(scores),
+                            category_index,
+                            use_normalized_coordinates=True,
+                            line_thickness=8)
+                        
+                        np_boxes = np.squeeze(boxes)
+                        np_classes = np.squeeze(classes)
+                        
+                        for i in range(len(np_classes)): #traverse the length of np_classes
+                          if np_classes[i] == get_id_for_label("Human face"): # id of Human face
+                            print(np_boxes[i])
+
+                        # Prints the bounding box coordinate but not the frame.
+                        cv2.imshow('object detection_0', cv2.resize(frame, (800,600)))
+                        #if self.camera_source == 0: 
+                        #   while turn != 0:
+                        #      continue 
+                        #   cv2.imshow('object detection_0', cv2.resize(frame, (800,600)))
+                        #   turn = 2
+                        #else:
+                        #   while turn != 2:
+                        #      continue
+                        #   cv2.imshow('object detection_2', cv2.resize(frame, (800,600)))
+                        #   turn = 0
                         if not grabbed:
                             break
-
+                        
                         # open a spot in the buffer
                         if self.buffer.full():
                             self.buffer.get()
@@ -580,10 +598,11 @@ class Camera_Thread:
 
         # get from buffer (fail if empty)
         try:
+            print("Reading from buffer")
             frame = self.buffer.get(timeout=wait)
             self.frames_returned += 1
         except queue.Empty:
-            #print('Queue Empty!')
+            print('Queue Empty!')
             #print(traceback.format_exc())
             pass
 
