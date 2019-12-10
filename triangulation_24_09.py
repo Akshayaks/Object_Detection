@@ -7,6 +7,7 @@
 # ------------------------------
 # Imports
 # ------------------------------
+#Port connection info: bottom - right camera, top - left camera
 import sys
 sys.path.remove('/opt/ros/kinetic/lib/python2.7/dist-packages')
 import os,time,traceback
@@ -24,17 +25,10 @@ from matplotlib import pyplot as plt
 from PIL import Image
 from utils import label_map_util
 from utils import visualization_utils as vis_util
-
-#cap = cv2.VideoCapture(0)
-
+import pyttsx3
 
 # This is needed since the notebook is stored in the object_detection folder.
 sys.path.append("..")
-
-
-# ## Object detection imports
-# Here are the imports from the object detection module.
-
 
 # # Model preparation 
 
@@ -96,8 +90,9 @@ def load_image_into_numpy_array(image):
   (im_width, im_height) = image.size
   return np.array(image.getdata()).reshape(
       (im_height, im_width, 3)).astype(np.uint8)
+
 def get_id_for_label(val):
-    for key,value in category_index.items(): # to find id of glasses
+    for key,value in category_index.items(): # to find id of given label i.e. Glasses
         for inner_key,inner_value in value.items():
           if inner_value==val:
             return value['id']
@@ -131,13 +126,13 @@ def run():
 
         # cameras variables
         left_camera_source = 2
-        right_camera_source = 0
+        right_camera_source = 1
         pixel_width = 1280     # Based on specifications of C270 hd logitech camera  
         pixel_height = 720     
-        angle_width = 46    #Found using manual methods (as seen in the video)       
-        angle_height = 36
+        angle_width = 45    #Found using manual methods (as seen in the video)       
+        angle_height = 35
         frame_rate = 30                 #cameras tested with find_fps_webcam.py - keeps changing
-        camera_separation = 2.3622     #60 mm baseline separation (given in inches)
+        camera_separation = 4     #100 mm baseline separation (given in inches)
         
         # left camera 1
         ct1 = Camera_Thread()    # Each of these threads need to run both the SSD and the triangulation code
@@ -154,8 +149,6 @@ def run():
         ct2.camera_frame_rate = frame_rate
 
         # camera coding
-        #ct1.camera_fourcc = cv2.VideoWriter_fourcc(*"YUYV")
-        #ct2.camera_fourcc = cv2.VideoWriter_fourcc(*"YUYV")
         ct1.camera_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         ct2.camera_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
 
@@ -200,78 +193,175 @@ def run():
         # ------------------------------
 
         # pause to stabilize
-        time.sleep(0.5) #modify according to lag
+        time.sleep(0.0) #modify according to lag
 
         # ------------------------------
         # targeting loop 
         # ------------------------------
 
         # variables
-        maxsd = 2 # maximum size difference of targets, percent of frame
-        klen  = 3 # length of target queues, positive target frames required to reset set X,Y,Z,D !!!!!
-
-        # target queues
-        x1k,y1k,x2k,y2k = [],[],[],[]
-        x1m,y1m,x2m,y2m = 0,0,0,0
+        maxsd = 10 # maximum size difference of targets, percent of frame
+        
 
         # last positive target
         # from camera baseline midpoint
         X,Y,Z,D = 0,0,0,0
 
+        #Frame dimensions
+
+
         # loop
         while 1:
 
             # get frames
-            frame1 = ct1.next(black=True,wait=1)
-            frame2 = ct2.next(black=True,wait=1)
+            found1, frame1,t_array1,o_flag1,o_array1 = ct1.next(black=True,wait=1)
+            found2, frame2,t_array2,o_flag2,o_array2 = ct2.next(black=True,wait=1)
+            if not (found1 or found2):
+            	print("Target not found")
+            	###engine.say('Target not found.')
+            	cv2.imshow("Left Camera 1",frame1)
+            	cv2.imshow("Right Camera 2",frame2)
 
-            # motion detection targets
-            targets1 = targeter1.targets(frame1) # returns the centeroid and bounding box coordinates
-            targets2 = targeter2.targets(frame2)
+            	# detect keys
+            	key = cv2.waitKey(1) & 0xFF
+            	if cv2.getWindowProperty('Left Camera 1',cv2.WND_PROP_VISIBLE) < 1:
+            	    break
+            	elif cv2.getWindowProperty('Right Camera 2',cv2.WND_PROP_VISIBLE) < 1:
+            	    break
+            	elif key == ord('q'):
+            	    break
+            	elif key != 255:
+            	    print('KEY PRESS:',[chr(key)])
 
-            # check 1: motion in both frames
-            if not (targets1 and targets2):
-                x1k,y1k,x2k,y2k = [],[],[],[] # reset # if object not detected in the frames
+            	continue
             else:
+            	print("Target found")
+            	###engine.say('Target found.')
 
-                # split
-                x1,y1,s1 = targets1[0]
-                x2,y2,s2 = targets2[0]
+            	
+            #For target object
+            frame1_pil = Image.fromarray(frame1)
+            w, h = frame1_pil.size
+            np.copyto(frame1,np.array(frame1_pil))
 
-                # check 2: similar size
-                #if 100*(abs(s1-s2)/max(s1,s2)) > minsd:
-                if abs(s1-s2) > maxsd:
-                    x1k,y1k,x2k,y2k = [],[],[],[] # reset # if percent ckhange is more, they are two diff objects
-                else:
+            ##For obstacles
+            full_text=""
 
-                    # update queues # there are 4 queues!!
-                    x1k.append(x1)
-                    y1k.append(y1)
-                    x2k.append(x2)
-                    y2k.append(y2)
+            if o_array1 and o_array2:
+            	for o_box1,o_box2 in zip(o_array1,o_array2):
 
-                    # check 3: queues full
-                    if len(x1k) >= klen:
+            		o_box1[0]=o_box1[0]*h
+            		o_box1[1]=o_box1[1]*w
+            		o_box1[2]=o_box1[2]*h
+            		o_box1[3]=o_box1[3]*w  		##Converting to normal coordinates
+            		o_box1_XC=(o_box1[1]+o_box1[3])/2
+            		o_box1_YC=(o_box1[0]+o_box1[2])/2  
 
-                        # trim such that the latest 3 entries remain in the array
-                        x1k = x1k[-klen:]
-                        y1k = y1k[-klen:]
-                        x2k = x2k[-klen:]
-                        y2k = y2k[-klen:]
+            		o_box2[0]=o_box2[0]*h
+            		o_box2[1]=o_box2[1]*w
+            		o_box2[2]=o_box2[2]*h
+            		o_box2[3]=o_box2[3]*w  		##Converting to normal coordinates
+            		o_box2_XC=(o_box2[1]+o_box2[3])/2
+            		o_box2_YC=(o_box2[0]+o_box2[2])/2              		          		
 
-                        # mean values
-                        x1m = sum(x1k)/klen
-                        y1m = sum(y1k)/klen
-                        x2m = sum(x2k)/klen
-                        y2m = sum(y2k)/klen
-                                
-                        # get angles from camera centers
-                        xlangle,ylangle = angler.angles_from_center(x1m,y1m,top_left=True,degrees=True)
-                        xrangle,yrangle = angler.angles_from_center(x2m,y2m,top_left=True,degrees=True)
-                        
-                        # triangulate
-                        X,Y,Z,D = angler.location(camera_separation,(xlangle,ylangle),(xrangle,yrangle),center=True,degrees=True)
-        
+            		# get angles from camera centers
+            		o_xlangle,o_ylangle = angler.angles_from_center(o_box1_XC,o_box1_YC,top_left=True,degrees=True)
+            		o_xrangle,o_yrangle = angler.angles_from_center(o_box2_XC,o_box2_YC,top_left=True,degrees=True)
+
+            		# triangulate
+            		o_X,o_Y,o_Z,o_D = angler.location(camera_separation,(o_xlangle,o_ylangle),(o_xrangle,o_yrangle),center=True,degrees=True)
+            		o_Zi = str(int(abs(o_Z)))
+            		if o_Z<20.0:
+            			if o_X<0 and abs(o_Y)<12.0:
+            				text="Top left "+o_Zi+"inches."
+            			if o_X<0 and abs(o_Y)>12.0:
+            				text="Bottom left "+o_Zi+"inches."
+            			if o_X>0 and abs(o_Y)<12.0:
+            				text="Top right "+o_Zi+"inches."   
+            			if o_X>0 and abs(o_Y)>12.0:
+            				text="Bottom right "+o_Zi+"."  
+            			if o_X==0 and abs(o_Y)>12.0:
+            				text="Below "+o_Zi+"inches."     
+            			if o_X==0 and abs(o_Y)<12.0:
+            				text="Above "+o_Zi+"inches."     
+            			if o_X==0 and abs(o_Y)==12.0:
+            				text="Straight "+o_Zi+"inches."
+            		else:
+            			text=""
+            		full_text=full_text+text
+
+            	
+                    # display obstacles
+            		targeter1.frame_add_crosshairs(frame1,o_box1_XC,o_box1_YC,48)            
+            		targeter2.frame_add_crosshairs(frame2,o_box2_XC,o_box2_YC,48)
+            	
+            	print(full_text)
+ 
+                # detect keys
+            	key = cv2.waitKey(1) & 0xFF
+            	if key == ord('o'):
+            		print(full_text)
+            		# engine = pyttsx3.init()
+            		# engine.say(full_text)
+            		# engine.runAndWait()
+
+            Z=1000.0
+            target_text=""
+            if t_array1 and t_array2:
+            	for t_box1,t_box2 in zip(t_array1,t_array2):
+
+            		t_box1[0]=t_box1[0]*h
+            		t_box1[1]=t_box1[1]*w
+            		t_box1[2]=t_box1[2]*h
+            		t_box1[3]=t_box1[3]*w  		##Converting to normal coordinates
+            		t_box1_XC=(t_box1[1]+t_box1[3])/2
+            		t_box1_YC=(t_box1[0]+t_box1[2])/2  
+
+            		t_box2[0]=t_box2[0]*h
+            		t_box2[1]=t_box2[1]*w
+            		t_box2[2]=t_box2[2]*h
+            		t_box2[3]=t_box2[3]*w  		##Converting to normal coordinates
+            		t_box2_XC=(t_box2[1]+t_box2[3])/2
+            		t_box2_YC=(t_box2[0]+t_box2[2])/2              		          		
+
+            		# get angles from camera centers
+            		xlangle,ylangle = angler.angles_from_center(t_box1_XC,t_box1_YC,top_left=True,degrees=True)
+            		xrangle,yrangle = angler.angles_from_center(t_box2_XC,t_box2_YC,top_left=True,degrees=True)
+
+            		# triangulate
+            		tX,tY,tZ,tD = angler.location(camera_separation,(xlangle,ylangle),(xrangle,yrangle),center=True,degrees=True)
+
+            		if abs(tZ)<Z:
+            			Z=tZ
+            			X=tX
+            			Y=tY
+            			x1=t_box1_XC
+            			y1=t_box1_YC
+            			x2=t_box2_XC
+            			y2=t_box2_YC
+
+
+            	Zi =str(int(abs(Z)))
+
+            	if X<0 and abs(Y)<12.0:
+            		text="Top left "+Zi+"inches."
+            	if X<0 and abs(Y)>12.0:
+            		text="Bottom left "+Zi+"inches."
+            	if X>0 and abs(Y)<12.0:
+            		text="Top right "+Zi+"inches."   
+            	if X>0 and abs(Y)>12.0:
+            		text="Bottom right "+Zi+"inches."  
+            	if X==0 and abs(Y)>12.0:
+            		text="Below "+Zi+"inches."     
+            	if X==0 and abs(Y)<12.0:
+            		text="Above "+Zi+"inches."     
+            	if X==0 and abs(Y)==12.0:
+            		text="Straight "+Zi+"inches." 
+
+            	# display current targets
+            	targeter1.frame_add_crosshairs(frame1,x1,y1,48)            
+            	targeter2.frame_add_crosshairs(frame2,x2,y2,48)
+
             # display camera centers
             angler.frame_add_crosshairs(frame1)
             angler.frame_add_crosshairs(frame2)
@@ -279,10 +369,10 @@ def run():
             # display coordinate data
             fps1 = int(ct1.current_frame_rate)
             fps2 = int(ct2.current_frame_rate)
-            text = 'X: {:3.1f}\nY: {:3.1f}\nZ: {:3.1f}\nD: {:3.1f}\nFPS: {}/{}'.format(X,Y,Z,D,fps1,fps2)
+            text = 'X: {:3.1f}\nY: {:3.1f}\nZ: {:3.1f}\nFPS: {}/{}'.format(X,Y,abs(Z),fps1,fps2)
             lineloc = 0
             lineheight = 30
-            print("FPS calculated")
+            #print("FPS calculated","Depth: ",D)
             for t in text.split('\n'):
                 lineloc += lineheight
                 cv2.putText(frame1,
@@ -291,16 +381,25 @@ def run():
                             cv2.FONT_HERSHEY_PLAIN, # font
                             #cv2.FONT_HERSHEY_SIMPLEX, # font
                             1.5, # size
-                            (0,255,0), # color
+                            (0,0,0), # color
                             1, # line width
                             cv2.LINE_AA, #
                             False) #
 
-            # display current target
-            if x1k:
-                targeter1.frame_add_crosshairs(frame1,x1m,y1m,48)            
-                targeter2.frame_add_crosshairs(frame2,x2m,y2m,48)            
+            for t in text.split('\n'):
+                lineloc += lineheight
+                cv2.putText(frame2,
+                            t,
+                            (10,lineloc), # location
+                            cv2.FONT_HERSHEY_PLAIN, # font
+                            #cv2.FONT_HERSHEY_SIMPLEX, # font
+                            1.5, # size
+                            (0,0,0), # color
+                            1, # line width
+                            cv2.LINE_AA, #
+                            False) #
 
+            
             # display frame
             cv2.imshow("Left Camera 1",frame1)
             cv2.imshow("Right Camera 2",frame2)
@@ -386,6 +485,9 @@ class Camera_Thread:
     camera_height = 720
     camera_frame_rate = 30
     camera_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    detection_graph.as_default()
+    sess = tf.Session(graph=detection_graph)
+   
 
     # buffer setup
     buffer_length = 5
@@ -450,6 +552,7 @@ class Camera_Thread:
         self.thread = threading.Thread(target=self.loop)
         self.thread.start()
 
+
     def stop(self):
 
         # set loop kill state
@@ -485,102 +588,68 @@ class Camera_Thread:
         # frame rate
         fc = 0
         t1 = time.time()
+        
+        while 1:
 
-        with detection_graph.as_default():
-            with tf.Session(graph=detection_graph) as sess:
-                print("I am in the tf session") # This gets printed for both cameras, implying that they both enter this
-        # loop
-                while 1:
+            # external shut down
+            if not self.frame_grab_run:
+                break
 
-                    # external shut down
-                    if not self.frame_grab_run:
+            # true buffered mode (for files, no loss)
+            if self.buffer_all:
+
+                # buffer is full, pause and loop
+                if self.buffer.full():
+                    time.sleep(1/self.camera_frame_rate)
+
+                # or load buffer with next frame
+                else:
+                    print("Inside True buffer_all condition")
+                    grabbed,frame = self.camera.read()
+
+                    
+
+                    if not grabbed:
                         break
 
-                    # true buffered mode (for files, no loss)
-                    if self.buffer_all:
+                    self.buffer.put(frame,False)
+                    self.frame_count += 1
+                    fc += 1
 
-                        # buffer is full, pause and loop
-                        if self.buffer.full():
-                            time.sleep(1/self.camera_frame_rate)
+            # false buffered mode (for camera, loss allowed)
+            else:
+                
+                grabbed,frame = self.camera.read()
+                
+                #if self.camera_source == 0: 
+                #   while turn != 0:
+                #      continue 
+                #   cv2.imshow('object detection_0', cv2.resize(frame, (800,600)))
+                #   turn = 2
+                #else:
+                #   while turn != 2:
+                #      continue
+                #   cv2.imshow('object detection_2', cv2.resize(frame, (800,600)))
+                #   turn = 0
+                if not grabbed:
+                    break
+                
+                # open a spot in the buffer
+                if self.buffer.full():
+                    self.buffer.get()
 
-                        # or load buffer with next frame
-                        else:
-                            print("Inside True buffer_all condition")
-                            grabbed,frame = self.camera.read()
-
-                            
-
-                            if not grabbed:
-                                break
-
-                            self.buffer.put(frame,False)
-                            self.frame_count += 1
-                            fc += 1
-
-                    # false buffered mode (for camera, loss allowed)
-                    else:
-                        print("Inside the SSD")
-                        grabbed,frame = self.camera.read()
-                        # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-                        image_np_expanded = np.expand_dims(frame, axis=0)
-                        image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
-                        # Each box represents a part of the image where a particular object was detected.
-                        boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
-                        # Each score represent how level of confidence for each of the objects.
-                        # Score is shown on the result image, together with the class label.
-                        scores = detection_graph.get_tensor_by_name('detection_scores:0')
-                        classes = detection_graph.get_tensor_by_name('detection_classes:0')
-                        num_detections = detection_graph.get_tensor_by_name('num_detections:0')
-                        # Actual detection.
-                        (boxes, scores, classes, num_detections) = sess.run(
-                            [boxes, scores, classes, num_detections],
-                            feed_dict={image_tensor: image_np_expanded})
-                        # Visualization of the results of a detection.
-                        vis_util.visualize_boxes_and_labels_on_image_array(
-                            frame,
-                            np.squeeze(boxes),
-                            np.squeeze(classes).astype(np.int64), #changed it from int32
-                            np.squeeze(scores),
-                            category_index,
-                            use_normalized_coordinates=True,
-                            line_thickness=8)
-                        
-                        np_boxes = np.squeeze(boxes)
-                        np_classes = np.squeeze(classes)
-                        
-                        for i in range(len(np_classes)): #traverse the length of np_classes
-                          if np_classes[i] == get_id_for_label("Human face"): # id of Human face
-                            print(np_boxes[i])
-
-                        # Prints the bounding box coordinate but not the frame.
-                        cv2.imshow('object detection_0', cv2.resize(frame, (800,600)))
-                        #if self.camera_source == 0: 
-                        #   while turn != 0:
-                        #      continue 
-                        #   cv2.imshow('object detection_0', cv2.resize(frame, (800,600)))
-                        #   turn = 2
-                        #else:
-                        #   while turn != 2:
-                        #      continue
-                        #   cv2.imshow('object detection_2', cv2.resize(frame, (800,600)))
-                        #   turn = 0
-                        if not grabbed:
-                            break
-                        
-                        # open a spot in the buffer
-                        if self.buffer.full():
-                            self.buffer.get()
-
-                        self.buffer.put(frame,False)
-                        self.frame_count += 1
-                        fc += 1
-
-                    # update frame read rate
-                    if fc >= 10:
-                        self.current_frame_rate = round(fc/(time.time()-t1),2)
-                        fc = 0
-                        t1 = time.time()
-
+                self.buffer.put(frame,False)
+                self.frame_count += 1
+                fc += 1
+            
+            # update frame read rate
+            if fc >= 10:
+                self.current_frame_rate = round(fc/(time.time()-t1),2)
+                fc = 0
+                t1 = time.time()
+        
+            #time.sleep(0.5)
+         
         # shut down
         self.loop_start_time = 0
         self.frame_grab_on = False
@@ -601,13 +670,74 @@ class Camera_Thread:
             print("Reading from buffer")
             frame = self.buffer.get(timeout=wait)
             self.frames_returned += 1
+            print("Got frame no",self.frames_returned,self.camera_source)
+            # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+            image_np_expanded = np.expand_dims(frame, axis=0)
+            image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
+            # Each box represents a part of the image where a particular object was detected.
+            boxes = detection_graph.get_tensor_by_name('detection_boxes:0')
+            # Each score represent how level of confidence for each of the objects.
+            # Score is shown on the result image, together with the class label.
+            scores = detection_graph.get_tensor_by_name('detection_scores:0')
+            classes = detection_graph.get_tensor_by_name('detection_classes:0')
+            num_detections = detection_graph.get_tensor_by_name('num_detections:0')
+            # Actual detection.
+            (boxes, scores, classes, num_detections) = self.sess.run(
+                [boxes, scores, classes, num_detections],
+                feed_dict={image_tensor: image_np_expanded})
+            # Visualization of the results of a detection.
+            vis_util.visualize_boxes_and_labels_on_image_array(
+                frame,
+                np.squeeze(boxes),
+                np.squeeze(classes).astype(np.int64), #changed it from int32
+                np.squeeze(scores),
+                category_index,
+                use_normalized_coordinates=True,
+                line_thickness=8)
+            
+            np_boxes = np.squeeze(boxes)
+            np_classes = np.squeeze(classes)
+            index = 0 # Variable for getting box index, initially not a valid index
+            found = False
+            obstacles= False
+            obstacle_array=[]
+            target_array=[]
+            f = open("input_obj.txt","r")
+            obj_name=f.read()
+            print(obj_name)
+            print(type(obj_name)) 
+            is_obstacle = False
+            # for i in range(len(np_classes)): #traverse the length of np_classes
+            #   if is_obstacle==False and np_classes[i] == get_id_for_label("Human face"): # id of Human face
+            #     print("Target B_Box:",np_boxes[i])
+            #     index = i
+            #     found = True
+            #     is_obstacle=True
+            #   elif np_classes[i] == get_id_for_label("Human face") and is_obstacle==True or np_classes[i] != get_id_for_label(obj_name) and np_boxes[i].all():
+            #   	print("Obstacle B_Box:",np_boxes[i])
+            #   	obstacles=True
+            #   	obstacle_array.append(np_boxes[i])
+            for i in range(len(np_classes)): #traverse the length of np_classes
+              if np_classes[i] == get_id_for_label("Human face"): # id of Human face
+                print("Target B_Box:",np_boxes[i])
+                target_array.append(np_boxes[i])
+                found = True
+              elif np_classes[i] != get_id_for_label(obj_name) and np_boxes[i].all():
+              	print("Obstacle B_Box:",np_boxes[i])
+              	obstacles=True
+              	obstacle_array.append(np_boxes[i])
+
+
+            # Prints the bounding box coordinate but not the frame.
+            cv2.imshow('camera', cv2.resize(frame, (800,600)))
         except queue.Empty:
             print('Queue Empty!')
             #print(traceback.format_exc())
             pass
 
         # done
-        return frame
+        
+        return found, frame, target_array, obstacles, obstacle_array
 
 # ------------------------------
 # Motion Detection
@@ -630,8 +760,8 @@ class Frame_Motion:
     # target select
     targets_max = 1 # max targets returned, hence will not detect more than 4 things in a frame
     target_on_contour = True # else use box size
-    target_return_box  = True # True = return (x,y,bx,by,bw,bh), else check target_return_size
-    target_return_size = False # True = return (x,y,percent_frame_size), else just (x,y)
+    target_return_box  = False # True = return (x,y,bx,by,bw,bh), else check target_return_size
+    target_return_size = True # True = return (x,y,percent_frame_size), else just (x,y)
 
     # display targets
     targets_draw  = True
@@ -647,7 +777,7 @@ class Frame_Motion:
     # Functions
     # ------------------------------
 
-    def targets(self,frame,bx=4,by=4,bw=3,bh=3): # This has to be passed from the ssd code (this function is called there)
+    def targets(self,frame,bx,by,bw,bh): # This has to be passed from the ssd code (this function is called there)
 
         # frame dimensions
         width,height,depth = np.shape(frame)
@@ -693,6 +823,7 @@ class Frame_Motion:
         cv2.line(frame,(x-r*2,y),(x+r*2,y),lc,lw)
 
         cv2.circle(frame,(x,y),r,cc,cw)
+
 
 
 # ------------------------------
@@ -776,7 +907,7 @@ class Frame_Angles:
 
         # center point (also max pixel distance from origin)
         self.x_origin = int(self.pixel_width/2)
-        self.y_origin = int(self.pixel_height/2)
+        self.y_origin = int(self.pixel_height/2) #added negative sign
 
         # theoretical distance in pixels from camera to frame
         # this is the adjacent-side length in tangent calculations
@@ -801,7 +932,7 @@ class Frame_Angles:
 
         if top_left:
             x = x - self.x_origin
-            y = self.y_origin - y
+            y = -self.y_origin - y
 
         xtan = x/self.x_adjacent
         ytan = y/self.y_adjacent
