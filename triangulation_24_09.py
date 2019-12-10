@@ -25,17 +25,10 @@ from matplotlib import pyplot as plt
 from PIL import Image
 from utils import label_map_util
 from utils import visualization_utils as vis_util
-
-#cap = cv2.VideoCapture(0)
-
+import pyttsx3
 
 # This is needed since the notebook is stored in the object_detection folder.
 sys.path.append("..")
-
-
-# ## Object detection imports
-# Here are the imports from the object detection module.
-
 
 # # Model preparation 
 
@@ -97,8 +90,9 @@ def load_image_into_numpy_array(image):
   (im_width, im_height) = image.size
   return np.array(image.getdata()).reshape(
       (im_height, im_width, 3)).astype(np.uint8)
+
 def get_id_for_label(val):
-    for key,value in category_index.items(): # to find id of glasses
+    for key,value in category_index.items(): # to find id of given label i.e. Glasses
         for inner_key,inner_value in value.items():
           if inner_value==val:
             return value['id']
@@ -135,10 +129,10 @@ def run():
         right_camera_source = 1
         pixel_width = 1280     # Based on specifications of C270 hd logitech camera  
         pixel_height = 720     
-        angle_width = 46    #Found using manual methods (as seen in the video)       
-        angle_height = 36
+        angle_width = 45    #Found using manual methods (as seen in the video)       
+        angle_height = 35
         frame_rate = 30                 #cameras tested with find_fps_webcam.py - keeps changing
-        camera_separation = 2.8     #70 mm baseline separation (given in inches)
+        camera_separation = 4     #100 mm baseline separation (given in inches)
         
         # left camera 1
         ct1 = Camera_Thread()    # Each of these threads need to run both the SSD and the triangulation code
@@ -214,35 +208,107 @@ def run():
         X,Y,Z,D = 0,0,0,0
 
         #Frame dimensions
+        
+        ###engine = pyttsx3.init()
+
 
         # loop
         while 1:
 
             # get frames
-            found1, frame1,b_box1 = ct1.next(black=True,wait=1)
-            found2, frame2,b_box2 = ct2.next(black=True,wait=1)
+            found1, frame1,b_box1,o_flag1,o_array1 = ct1.next(black=True,wait=1)
+            found2, frame2,b_box2,o_flag2,o_array2 = ct2.next(black=True,wait=1)
             if not (found1 or found2):
             	print("Target not found")
+            	###engine.say('Target not found.')
+            	cv2.imshow("Left Camera 1",frame1)
+            	cv2.imshow("Right Camera 2",frame2)
+
+            	# detect keys
+            	key = cv2.waitKey(1) & 0xFF
+            	if cv2.getWindowProperty('Left Camera 1',cv2.WND_PROP_VISIBLE) < 1:
+            	    break
+            	elif cv2.getWindowProperty('Right Camera 2',cv2.WND_PROP_VISIBLE) < 1:
+            	    break
+            	elif key == ord('q'):
+            	    break
+            	elif key != 255:
+            	    print('KEY PRESS:',[chr(key)])
+
+            	continue
             else:
             	print("Target found")
-            	
+            	###engine.say('Target found.')
 
+            	
+            #For target object
             frame1_pil = Image.fromarray(frame1)
             w, h = frame1_pil.size
             np.copyto(frame1,np.array(frame1_pil))
 
+            ##For obstacles
+
+            if o_array1 and o_array2:
+            	for o_box1,o_box2 in zip(o_array1,o_array2):
+
+            		o_box1[0]=o_box1[0]*h
+            		o_box1[1]=o_box1[1]*w
+            		o_box1[2]=o_box1[2]*h
+            		o_box1[3]=o_box1[3]*w  		##Converting to normal coordinates
+            		o_box1_XC=(o_box1[1]+o_box1[3])/2
+            		o_box1_YC=(o_box1[0]+o_box1[2])/2  
+
+            		o_box2[0]=o_box2[0]*h
+            		o_box2[1]=o_box2[1]*w
+            		o_box2[2]=o_box2[2]*h
+            		o_box2[3]=o_box2[3]*w  		##Converting to normal coordinates
+            		o_box2_XC=(o_box2[1]+o_box2[3])/2
+            		o_box2_YC=(o_box2[0]+o_box2[2])/2              		          		
+
+            		# get angles from camera centers
+            		o_xlangle,o_ylangle = angler.angles_from_center(o_box1_XC,o_box1_YC,top_left=True,degrees=True)
+            		o_xrangle,o_yrangle = angler.angles_from_center(o_box2_XC,o_box2_YC,top_left=True,degrees=True)
+
+            		# triangulate
+            		o_X,o_Y,o_Z,o_D = angler.location(camera_separation,(o_xlangle,o_ylangle),(o_xrangle,o_yrangle),center=True,degrees=True)
+
+            		if o_Z<20.0:
+            			###engine.say("obstacle alert.")
+            			if o_X<0 and abs(o_Y)<12.0:
+            				print("Target is to your top left at a depth of ",abs(o_Z))
+            			if o_X<0 and abs(o_Y)>12.0:
+            				print("Target is to your bottom left at a depth of ",abs(o_Z))
+            			if o_X>0 and abs(o_Y)<12.0:
+            				print("Target is to your top right at a depth of ",abs(o_Z))   
+            			if o_X>0 and abs(o_Y)>12.0:
+            				print("Target is to your bottom right at a depth of ",abs(o_Z))  
+            			if o_X==0 and abs(o_Y)>12.0:
+            				print("Target is to your bottom at a depth of ",abs(o_Z))     
+            			if o_X==0 and abs(o_Y)<12.0:
+            				print("Target is to your top at a depth of ",abs(o_Z))     
+            			if o_X==0 and abs(o_Y)==12.0:
+            				print("Target is straight ahead at a depth of ",abs(o_Z))
+  
+
+                    # display obstacles
+            		targeter1.frame_add_crosshairs(frame1,o_box1_XC,o_box1_YC,48)            
+            		targeter2.frame_add_crosshairs(frame2,o_box2_XC,o_box2_YC,48) 
+
+
+
+
             #w,h,d = np.shape(frame1)
             #print("frame dimensions",wid,hei,w,h)
             #multiply because the ssd returns normailized coordinates from [0,1]
-            bxmin1 = b_box1[1]*w
             bymin1 = b_box1[0]*h
-            bxmax1 = b_box1[3]*w
+            bxmin1 = b_box1[1]*w
             bymax1 = b_box1[2]*h
-            
+            bxmax1 = b_box1[3]*w
+
+            bymin2 = b_box2[0]*h            
             bxmin2 = b_box2[1]*w
-            bymin2 = b_box2[0]*h
-            bxmax2 = b_box2[3]*w
             bymax2 = b_box2[2]*h
+            bxmax2 = b_box2[3]*w
 
             width,height,depth = np.shape(frame1)
             area1 = width*height
@@ -282,30 +348,44 @@ def run():
             #print("First box: ",targets1,"Second box: ",targets2)
 
             # check 1: motion in both frames
-            if not (targets1 and targets2):
-                print("No target found")
-                x1k,y1k,x2k,y2k = [],[],[],[] # reset # if object not detected in the frames
-            else:
 
-                # split
-                x1,y1,s1 = targets1[0]     #assuming there is only one face
-                x2,y2,s2 = targets2[0]
+            # if not (targets1 and targets2):
+            #     x1k,y1k,x2k,y2k = [],[],[],[] # reset # if object not detected in the frames
+            # else:
 
-                # check 2: similar size
-                #if 100*(abs(s1-s2)/max(s1,s2)) > minsd:
-                if abs(s1-s2) > maxsd:
-                    x1k,y1k,x2k,y2k = [],[],[],[] # reset # if percent ckhange is more, they are two diff objects
-                else:
-                    #print("centroid means",x1,y1,x2,y2)
-                    # get angles from camera centers
-                    xlangle,ylangle = angler.angles_from_center(x1,y1,top_left=True,degrees=True)
-                    xrangle,yrangle = angler.angles_from_center(x2,y2,top_left=True,degrees=True)
-                    
-                    # triangulate
-                    X,Y,Z,D = angler.location(camera_separation,(xlangle,ylangle),(xrangle,yrangle),center=True,degrees=True)
-                    
-                                
-                        
+            # split
+            x1,y1,s1 = targets1[0]     #assuming there is only one face
+            x2,y2,s2 = targets2[0]
+
+            # check 2: similar size
+            #if 100*(abs(s1-s2)/max(s1,s2)) > minsd:
+            # if abs(s1-s2) > maxsd:
+            #     x1k,y1k,x2k,y2k = [],[],[],[] # reset # if percent ckhange is more, they are two diff objects
+            # else:
+            #print("centroid means",x1,y1,x2,y2)
+            # get angles from camera centers
+            xlangle,ylangle = angler.angles_from_center(x1,y1,top_left=True,degrees=True)
+            xrangle,yrangle = angler.angles_from_center(x2,y2,top_left=True,degrees=True)
+            
+            # triangulate
+            X,Y,Z,D = angler.location(camera_separation,(xlangle,ylangle),(xrangle,yrangle),center=True,degrees=True)
+            
+            if X<0 and abs(Y)<12.0:
+            	print("Target is to your top left at a depth of ",abs(Z))
+            if X<0 and abs(Y)>12.0:
+            	print("Target is to your bottom left at a depth of ",abs(Z))
+            if X>0 and abs(Y)<12.0:
+            	print("Target is to your top right at a depth of ",abs(Z))   
+            if X>0 and abs(Y)>12.0:
+            	print("Target is to your bottom right at a depth of ",abs(Z))  
+            if X==0 and abs(Y)>12.0:
+            	print("Target is to your bottom at a depth of ",abs(Z))     
+            if X==0 and abs(Y)<12.0:
+            	print("Target is to your top at a depth of ",abs(Z))     
+            if X==0 and abs(Y)==12.0:
+            	print("Target is straight ahead at a depth of ",abs(Z))    
+
+            ###engine.runAndWait()                 
         
             # display camera centers
             angler.frame_add_crosshairs(frame1)
@@ -314,13 +394,26 @@ def run():
             # display coordinate data
             fps1 = int(ct1.current_frame_rate)
             fps2 = int(ct2.current_frame_rate)
-            text = 'Y: {:3.1f}\nZ: {:3.1f}\nFPS: {}/{}'.format(Y,abs(Z),fps1,fps2)
+            text = 'X: {:3.1f}\nY: {:3.1f}\nZ: {:3.1f}\nFPS: {}/{}'.format(X,Y,abs(Z),fps1,fps2)
             lineloc = 0
             lineheight = 30
             #print("FPS calculated","Depth: ",D)
             for t in text.split('\n'):
                 lineloc += lineheight
                 cv2.putText(frame1,
+                            t,
+                            (10,lineloc), # location
+                            cv2.FONT_HERSHEY_PLAIN, # font
+                            #cv2.FONT_HERSHEY_SIMPLEX, # font
+                            1.5, # size
+                            (0,0,0), # color
+                            1, # line width
+                            cv2.LINE_AA, #
+                            False) #
+
+            for t in text.split('\n'):
+                lineloc += lineheight
+                cv2.putText(frame2,
                             t,
                             (10,lineloc), # location
                             cv2.FONT_HERSHEY_PLAIN, # font
@@ -639,12 +732,20 @@ class Camera_Thread:
             np_classes = np.squeeze(classes)
             index = 0 # Variable for getting box index, initially not a valid index
             found = False
-            print("outside")
+            obstacles= False
+            obstacle_array=[]
+            f = open("input_obj.txt", "r")
+            obj_name=f.read()
+            print(obj_name) 
             for i in range(len(np_classes)): #traverse the length of np_classes
-              if np_classes[i] == get_id_for_label("Human face"): # id of Human face
-                print("original",np_boxes[i])
+              if np_classes[i] == get_id_for_label(obj_name): # id of Human face
+                print("Target B_Box:",np_boxes[i])
                 index = i
                 found = True
+              if np_classes[i] != get_id_for_label("Human face") and np_boxes[i].all():
+              	print("Obstacle B_Box:",np_boxes[i])
+              	obstacles=True
+              	obstacle_array.append(np_boxes[i])
 
 
             # Prints the bounding box coordinate but not the frame.
@@ -656,7 +757,7 @@ class Camera_Thread:
 
         # done
         
-        return found, frame, np_boxes[index]
+        return found, frame, np_boxes[index], obstacles, obstacle_array
 
 # ------------------------------
 # Motion Detection
